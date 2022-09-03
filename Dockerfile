@@ -5,6 +5,7 @@ ENV GLIBC_VER=2.34-r0
 # install glibc compatibility for alpine
 RUN apk --update-cache add \
         make \
+        git \
         binutils \
         curl \
         groff \

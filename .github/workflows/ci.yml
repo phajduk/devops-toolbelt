@@ -70,12 +70,16 @@ jobs:
             echo "::error::Trivy scan failed with exit code $SCAN_EXIT"
             exit "$SCAN_EXIT"
           fi
+          if [ ! -s trivy/trivy-results.json ]; then
+            echo "::error::Trivy scan did not produce a JSON report"
+            exit 1
+          fi
           docker run --rm \
             -v "$PWD/trivy":/work \
             "$TRIVY_IMAGE" convert \
             --format sarif \
-            --input /work/trivy-results.json \
-            --output /work/trivy-results.sarif
+            --output /work/trivy-results.sarif \
+            /work/trivy-results.json
           echo "SCAN_EXIT=${SCAN_EXIT}" >> "$GITHUB_ENV"
 
       - name: Summarise vulnerabilities

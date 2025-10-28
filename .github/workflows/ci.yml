@@ -58,12 +58,18 @@ jobs:
             -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$HOME/.cache/trivy":/root/.cache/ \
             -v "$PWD/trivy":/work \
-            "$TRIVY_IMAGE" image devops-toolbelt:scan \
+            "$TRIVY_IMAGE" image \
             --exit-code 1 \
             --severity HIGH,CRITICAL \
             --ignore-unfixed \
             --format json \
-            --output /work/trivy-results.json || SCAN_EXIT=$?
+            --output /work/trivy-results.json \
+            devops-toolbelt:scan || SCAN_EXIT=$?
+          SCAN_EXIT=${SCAN_EXIT:-0}
+          if [ "$SCAN_EXIT" -gt 1 ]; then
+            echo "::error::Trivy scan failed with exit code $SCAN_EXIT"
+            exit "$SCAN_EXIT"
+          fi
           docker run --rm \
             -v "$PWD/trivy":/work \
             "$TRIVY_IMAGE" convert \

@@ -37,11 +37,8 @@ RUN ARCH="${TARGETARCH:-$(uname -m)}" \
     && curl -fsSL "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/${KUBECTL_ARCH}/kubectl" -o /usr/local/bin/kubectl \
     && chmod +x /usr/local/bin/kubectl
 
-# Install helm (script handles architecture automatically)
-RUN curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 \
-    && chmod +x get_helm.sh \
-    && ./get_helm.sh \
-    && rm get_helm.sh
+# Install helm from Alpine packages to avoid external script flakiness
+RUN apk add --no-cache helm
 
 # Basic sanity checks
 RUN docker --version \

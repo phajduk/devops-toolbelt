@@ -47,26 +47,109 @@ jobs:
       - name: Build container image
         run: docker build -t devops-toolbelt:scan .
 
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.21.0
-        with:
-          image-ref: devops-toolbelt:scan
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          format: sarif
-          output: trivy-results.sarif
-          exit-code: 1
+      - name: Scan image with Trivy
+        env:
+          TRIVY_IMAGE: aquasec/trivy:0.51.2
+        run: |
+          set -eo pipefail
+          mkdir -p trivy "$HOME/.cache/trivy"
+          SCAN_EXIT=0
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$HOME/.cache/trivy":/root/.cache/ \
+            -v "$PWD/trivy":/work \
+            "$TRIVY_IMAGE" image devops-toolbelt:scan \
+            --exit-code 1 \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --format json \
+            --output /work/trivy-results.json || SCAN_EXIT=$?
+          docker run --rm \
+            -v "$PWD/trivy":/work \
+            "$TRIVY_IMAGE" convert \
+            --format sarif \
+            --input /work/trivy-results.json \
+            --output /work/trivy-results.sarif
+          echo "SCAN_EXIT=${SCAN_EXIT}" >> "$GITHUB_ENV"
 
-      - name: Upload Trivy scan report
+      - name: Summarise vulnerabilities
+        run: |
+          python3 <<'PY'
+import json
+import os
+import pathlib
+
+report = pathlib.Path('trivy/trivy-results.json')
+if not report.exists():
+    raise SystemExit('Missing Trivy report trivy/trivy-results.json')
+
+with report.open() as fh:
+    data = json.load(fh)
+
+results = []
+for res in data.get('Results', []):
+    target = res.get('Target', 'unknown')
+    for vuln in res.get('Vulnerabilities', []) or []:
+        sev = vuln.get('Severity', '').upper()
+        if sev not in ('HIGH', 'CRITICAL'):
+            continue
+        results.append({
+            'severity': sev,
+            'id': vuln.get('VulnerabilityID', ''),
+            'pkg': vuln.get('PkgName', 'unknown'),
+            'installed': vuln.get('InstalledVersion', 'unknown'),
+            'fixed': vuln.get('FixedVersion') or '—',
+            'title': vuln.get('Title', ''),
+            'target': target,
+        })
+
+order = {'CRITICAL': 0, 'HIGH': 1}
+results.sort(key=lambda r: (order.get(r['severity'], 99), r['id']))
+
+counts = {'CRITICAL': 0, 'HIGH': 0}
+for r in results:
+    counts[r['severity']] += 1
+
+summary_lines = []
+summary_lines.append('## Vulnerability Summary\n')
+summary_lines.append(f"- CRITICAL: {counts['CRITICAL']}\n")
+summary_lines.append(f"- HIGH: {counts['HIGH']}\n")
+
+if results:
+    summary_lines.append('\n| Severity | ID | Package | Installed | Fixed |\n')
+    summary_lines.append('| --- | --- | --- | --- | --- |\n')
+    for entry in results[:10]:
+        summary_lines.append(
+            f"| {entry['severity']} | {entry['id']} | {entry['pkg']} | {entry['installed']} | {entry['fixed']} |\n"
+        )
+    if len(results) > 10:
+        summary_lines.append(f"\n_Showing 10 of {len(results)} findings._\n")
+else:
+    summary_lines.append('\nNo HIGH/CRITICAL vulnerabilities found.\n')
+
+with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+    summary.writelines(summary_lines)
+PY
+
+      - name: Upload Trivy reports
         uses: actions/upload-artifact@v4
         with:
           name: trivy-results
-          path: trivy-results.sarif
+          path: |
+            trivy/trivy-results.json
+            trivy/trivy-results.sarif
 
       - name: Upload SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: trivy-results.sarif
+          sarif_file: trivy/trivy-results.sarif
+
+      - name: Enforce vulnerability policy
+        run: |
+          if [ "${SCAN_EXIT:-0}" -ne 0 ]; then
+            echo "::error::Trivy detected HIGH/CRITICAL vulnerabilities."
+            exit 1
+          fi
 
   publish:
     name: Publish Image

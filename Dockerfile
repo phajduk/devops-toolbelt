@@ -18,6 +18,7 @@ RUN apk --update --no-cache upgrade \
         groff \
         nodejs \
         npm \
+        zsh \
         python3 \
         py3-pip \
         mongodb-tools \
@@ -27,6 +28,12 @@ RUN apk --update --no-cache upgrade \
     && ln -sf python3 /usr/bin/python \
     && pip3 install --break-system-packages --no-cache awscli \
     && npm install -g mongosh \
+    && ZSH="/root/.oh-my-zsh" \
+       RUNZSH=no \
+       CHSH=no \
+       sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" \
+    && sed -i 's/^ZSH_THEME=.*$/ZSH_THEME="bira"/' /root/.zshrc \
+    && sed -i 's/^plugins=(git)$/plugins=(git aws)/' /root/.zshrc \
     && rm -rf /var/cache/apk/*
 
 # Helm & kubectl via Alpine packages to avoid external scripts
@@ -40,4 +47,6 @@ RUN docker --version \
     && kubectl version --client --output=yaml \
     && helm version --short
 
-CMD ["/bin/bash"]
+ENV SHELL=/bin/zsh
+
+CMD ["/bin/zsh"]

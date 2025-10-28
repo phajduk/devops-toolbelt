@@ -80,62 +80,44 @@ jobs:
 
       - name: Summarise vulnerabilities
         run: |
-          python3 <<'PY'
-import json
-import os
-import pathlib
-
-report = pathlib.Path('trivy/trivy-results.json')
-if not report.exists():
-    raise SystemExit('Missing Trivy report trivy/trivy-results.json')
-
-with report.open() as fh:
-    data = json.load(fh)
-
-results = []
-for res in data.get('Results', []):
-    target = res.get('Target', 'unknown')
-    for vuln in res.get('Vulnerabilities', []) or []:
-        sev = vuln.get('Severity', '').upper()
-        if sev not in ('HIGH', 'CRITICAL'):
-            continue
-        results.append({
-            'severity': sev,
-            'id': vuln.get('VulnerabilityID', ''),
-            'pkg': vuln.get('PkgName', 'unknown'),
-            'installed': vuln.get('InstalledVersion', 'unknown'),
-            'fixed': vuln.get('FixedVersion') or '—',
-            'title': vuln.get('Title', ''),
-            'target': target,
-        })
-
-order = {'CRITICAL': 0, 'HIGH': 1}
-results.sort(key=lambda r: (order.get(r['severity'], 99), r['id']))
-
-counts = {'CRITICAL': 0, 'HIGH': 0}
-for r in results:
-    counts[r['severity']] += 1
-
-summary_lines = []
-summary_lines.append('## Vulnerability Summary\n')
-summary_lines.append(f"- CRITICAL: {counts['CRITICAL']}\n")
-summary_lines.append(f"- HIGH: {counts['HIGH']}\n")
-
-if results:
-    summary_lines.append('\n| Severity | ID | Package | Installed | Fixed |\n')
-    summary_lines.append('| --- | --- | --- | --- | --- |\n')
-    for entry in results[:10]:
-        summary_lines.append(
-            f"| {entry['severity']} | {entry['id']} | {entry['pkg']} | {entry['installed']} | {entry['fixed']} |\n"
-        )
-    if len(results) > 10:
-        summary_lines.append(f"\n_Showing 10 of {len(results)} findings._\n")
-else:
-    summary_lines.append('\nNo HIGH/CRITICAL vulnerabilities found.\n')
-
-with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
-    summary.writelines(summary_lines)
-PY
+          if [ ! -s trivy/trivy-results.json ]; then
+            {
+              echo "## Vulnerability Summary"
+              echo "No HIGH/CRITICAL vulnerabilities found."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          jq -r '
+            def findings:
+              [ .Results[]? | .Vulnerabilities[]? |
+                select(.Severity == "CRITICAL" or .Severity == "HIGH") |
+                {severity: .Severity, id: .VulnerabilityID, pkg: .PkgName, installed: .InstalledVersion, fixed: (.FixedVersion // "—")} ];
+            def count_sev($f; $sev): ($f | map(select(.severity == $sev)) | length);
+            findings as $f
+            | [
+                "## Vulnerability Summary",
+                "",
+                "- CRITICAL: \(count_sev($f; "CRITICAL"))",
+                "- HIGH: \(count_sev($f; "HIGH"))",
+                ""
+              ]
+              + (if ($f | length) > 0 then
+                   [
+                     "| Severity | ID | Package | Installed | Fixed |",
+                     "| --- | --- | --- | --- | --- |"
+                   ]
+                   + (
+                     $f
+                     | sort_by((if .severity == "CRITICAL" then 0 else 1 end), .id)
+                     | .[:10]
+                     | map("| \(.severity) | \(.id) | \(.pkg) | \(.installed) | \(.fixed) |")
+                   )
+                   + (if ($f | length) > 10 then ["", "_Showing 10 of \($f | length) findings._"] else [] end)
+                 else
+                   ["No HIGH/CRITICAL vulnerabilities found."]
+                 end)
+            | .[]
+          ' trivy/trivy-results.json >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Trivy reports
         uses: actions/upload-artifact@v4
